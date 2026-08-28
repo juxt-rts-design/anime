@@ -13,6 +13,7 @@ import {
 } from '../lib/api';
 import { getAvailableVersions, getEpisodeKeys } from '../lib/episodes';
 import { getHistory, isResumable, resumePath, watchPath } from '../lib/history';
+import { prefetchWatchStream } from '../lib/watchPrefetch';
 import { mergeSeasonsWithCurrent } from '../lib/seasons';
 import type { AnimeDetail, EpisodesData, Season, Version } from '../types';
 
@@ -119,6 +120,9 @@ export default function TitleModal({ item, onClose }: Props) {
   const poster = detail?.banner || detail?.poster || item.poster || '';
 
   function play(ep?: string) {
+    const epKey = ep || (resumable && history ? history.episode : episodeKeys[0]);
+    const ver = resumable && history && !ep ? history.version : version;
+    prefetchWatchStream(activeId, ver, epKey);
     onClose();
     if (ep) {
       navigate(watchPath(activeId, ep, version));

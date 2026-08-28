@@ -1,3 +1,5 @@
+import { getCachedEpisodes } from './api';
+import { getAvailableVersions, getEpisodeKeys } from './episodes';
 import type { Version } from '../types';
 
 export interface HistoryEntry {
@@ -183,6 +185,15 @@ export function resumePath(entry: HistoryEntry) {
 export function playPath(id: string) {
   const entry = getHistory(id);
   if (entry && isResumable(entry)) return resumePath(entry);
+
+  const eps = getCachedEpisodes(id);
+  if (eps) {
+    const versions = getAvailableVersions(eps);
+    const ver = versions.includes('vostfr') ? 'vostfr' : versions[0];
+    const keys = getEpisodeKeys(eps, ver);
+    if (keys.length) return watchPath(id, keys[0], ver);
+  }
+
   return `/watch/${id}`;
 }
 

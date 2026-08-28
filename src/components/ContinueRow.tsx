@@ -3,6 +3,7 @@ import { useResumable } from '../hooks/useHistory';
 import { useTitleModal } from '../context/TitleModalContext';
 import { posterUrl, prefetchAnime } from '../lib/api';
 import { formatRemaining, removeHistory, resumePath, resumeRatio } from '../lib/history';
+import { prefetchWatchStream } from '../lib/watchPrefetch';
 
 function episodeLabel(key: string) {
   if (key.startsWith('oav')) return `OAV ${key.replace('oav', '')}`;
@@ -34,7 +35,10 @@ export default function ContinueRow() {
               <Link
                 to={resumePath(entry)}
                 className="anime-card"
-                onMouseEnter={() => prefetchAnime(entry.id)}
+                onMouseEnter={() => {
+                  prefetchAnime(entry.id);
+                  prefetchWatchStream(entry.id, entry.version, entry.episode);
+                }}
               >
                 <div className="anime-card-poster">
                   <img src={posterUrl(entry.poster)} alt={entry.title} loading="lazy" />

@@ -2,7 +2,8 @@ import { useNavigate } from 'react-router-dom';
 import type { AnimeItem } from '../types';
 import { posterUrl, prefetchAnime } from '../lib/api';
 import { warmPoster } from '../lib/posters';
-import { playPath, resumeRatio } from '../lib/history';
+import { playPath, resumeRatio, getHistory } from '../lib/history';
+import { prefetchWatchStream } from '../lib/watchPrefetch';
 import { useHistory, useWatchedIds } from '../hooks/useHistory';
 import { useTitleModal } from '../context/TitleModalContext';
 import FavoriteButton from './FavoriteButton';
@@ -21,9 +22,15 @@ export default function AnimeCard({ item, className = '' }: Props) {
   const ratio = history ? resumeRatio(history) : 0;
   const watched = watchedIds.has(item.id) || Boolean(history?.completed);
 
-  function play() {
+  function warmPlay() {
     prefetchAnime(item.id);
     warmPoster(item.poster);
+    const entry = getHistory(item.id);
+    prefetchWatchStream(item.id, entry?.version, entry?.episode);
+  }
+
+  function play() {
+    warmPlay();
     navigate(playPath(item.id));
   }
 
@@ -34,14 +41,8 @@ export default function AnimeCard({ item, className = '' }: Props) {
           type="button"
           className="anime-card-hit"
           onClick={play}
-          onMouseEnter={() => {
-            prefetchAnime(item.id);
-            warmPoster(item.poster);
-          }}
-          onFocus={() => {
-            prefetchAnime(item.id);
-            warmPoster(item.poster);
-          }}
+          onMouseEnter={warmPlay}
+          onFocus={warmPlay}
           aria-label={`Lire ${item.title}`}
         >
           <div className="anime-card-poster">

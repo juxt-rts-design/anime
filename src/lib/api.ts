@@ -160,20 +160,28 @@ export interface StreamInfo {
   subtitles?: SubtitleTrack[];
 }
 
+const streamCache = new Map<string, Promise<StreamInfo>>();
+
 export function resolveStream(embedUrl: string) {
-  const bust = Date.now();
-  return request<StreamInfo>(
-    `/api/stream?embed=${encodeURIComponent(embedUrl)}&_=${bust}`,
+  const cached = streamCache.get(embedUrl);
+  if (cached) return cached;
+
+  const promise = request<StreamInfo>(
+    `/api/stream?embed=${encodeURIComponent(embedUrl)}`,
     true,
-  );
+  ).catch((err) => {
+    streamCache.delete(embedUrl);
+    throw err;
+  });
+
+  streamCache.set(embedUrl, promise);
+  return promise;
 }
 
 export function toPlayableUrl(stream: StreamInfo): string {
-  const bust = Date.now();
   const params = new URLSearchParams({
     url: stream.url,
     referer: stream.referer,
-    _: String(bust),
   });
   return `/api/proxy?${params}`;
 }

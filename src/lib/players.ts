@@ -124,6 +124,11 @@ export function getAvailablePlayers(sources: EpisodeSources | Record<string, str
   return PLAYER_ORDER.filter((player) => getEmbedUrl(player, getSourceCode(sources, player)));
 }
 
+export function pickPreferredPlayer(available: PlayerType[]): PlayerType {
+  if (available.includes('vidzy')) return 'vidzy';
+  return available[0] || 'vidzy';
+}
+
 export function usesIframeFallback(player: PlayerType): boolean {
   return player === 'luluvid';
 }
