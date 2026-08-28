@@ -103,21 +103,19 @@ export default function VideoPlayer({
       hlsRef.current = null;
     }
 
-    const fail = (message: string) => {
-      setError(message);
-    };
+    const resumeAt = startAt > 8 ? startAt : 0;
 
-    const onReady = () => {
+    let started = false;
+    const markReady = () => {
+      if (started) return;
+      started = true;
       setReady(true);
-      if (startAt > 8) {
-        try {
-          video.currentTime = startAt;
-        } catch {
-          /* ignore */
-        }
-      }
       if (showSubtitles && activeSubtitles.length) enableFrenchSubtitles(video);
       if (autoPlay) tryPlay(video);
+    };
+
+    const fail = (message: string) => {
+      setError(message);
     };
 
     const useHls = isHls || src.includes('.m3u8') || src.includes('/api/proxy');
@@ -127,18 +125,23 @@ export default function VideoPlayer({
       const hls = new Hls({
         enableWorker: true,
         lowLatencyMode: false,
-        backBufferLength: 90,
-        maxBufferLength: 60,
-        startLevel: -1,
+        backBufferLength: 30,
+        maxBufferLength: 30,
+        startLevel: 0,
+        startPosition: resumeAt > 0 ? resumeAt : -1,
+        capLevelToPlayerSize: true,
+        startFragPrefetch: true,
+        abrEwmaDefaultEstimate: 500000,
       });
       hls.loadSource(src);
       hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, onReady);
+      hls.on(Hls.Events.FRAG_BUFFERED, markReady);
+      video.addEventListener('canplay', markReady, { once: true });
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (!data.fatal) return;
         if (data.type === Hls.ErrorTypes.NETWORK_ERROR && retries < 2) {
           retries += 1;
-          hls.startLoad();
+          hls.startLoad(resumeAt > 0 ? resumeAt : -1);
           return;
         }
         if (data.type === Hls.ErrorTypes.MEDIA_ERROR && retries < 2) {
@@ -151,11 +154,37 @@ export default function VideoPlayer({
       hlsRef.current = hls;
     } else if (useHls && video.canPlayType('application/vnd.apple.mpegurl')) {
       video.src = src;
-      video.addEventListener('loadedmetadata', onReady, { once: true });
+      video.addEventListener(
+        'loadedmetadata',
+        () => {
+          if (resumeAt > 0) {
+            try {
+              video.currentTime = resumeAt;
+            } catch {
+              /* ignore */
+            }
+          }
+        },
+        { once: true },
+      );
+      video.addEventListener('canplay', markReady, { once: true });
       video.addEventListener('error', () => fail('Impossible de lire ce flux.'), { once: true });
     } else {
       video.src = src;
-      video.addEventListener('canplay', onReady, { once: true });
+      if (resumeAt > 0) {
+        video.addEventListener(
+          'loadedmetadata',
+          () => {
+            try {
+              video.currentTime = resumeAt;
+            } catch {
+              /* ignore */
+            }
+          },
+          { once: true },
+        );
+      }
+      video.addEventListener('canplay', markReady, { once: true });
       video.addEventListener('error', () => fail('Impossible de lire cette vidéo.'), { once: true });
     }
 

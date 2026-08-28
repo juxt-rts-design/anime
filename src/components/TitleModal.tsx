@@ -123,6 +123,7 @@ export default function TitleModal({ item, onClose }: Props) {
     const epKey = ep || (resumable && history ? history.episode : episodeKeys[0]);
     const ver = resumable && history && !ep ? history.version : version;
     prefetchWatchStream(activeId, ver, epKey);
+    prefetchAnime(activeId, true);
     onClose();
     if (ep) {
       navigate(watchPath(activeId, ep, version));

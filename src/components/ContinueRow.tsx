@@ -39,6 +39,10 @@ export default function ContinueRow() {
                   prefetchAnime(entry.id);
                   prefetchWatchStream(entry.id, entry.version, entry.episode);
                 }}
+                onPointerDown={() => {
+                  prefetchAnime(entry.id);
+                  prefetchWatchStream(entry.id, entry.version, entry.episode);
+                }}
               >
                 <div className="anime-card-poster">
                   <img src={posterUrl(entry.poster)} alt={entry.title} loading="lazy" />

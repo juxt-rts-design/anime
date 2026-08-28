@@ -160,13 +160,24 @@ export interface StreamInfo {
   subtitles?: SubtitleTrack[];
 }
 
+const STREAM_MEMO_MS = 2 * 60 * 1000;
+const streamMemo = new Map<string, { at: number; promise: Promise<StreamInfo> }>();
+
 export function resolveStream(embedUrl: string, timeoutMs?: number) {
-  const bust = Date.now();
-  return request<StreamInfo>(
-    `/api/stream?embed=${encodeURIComponent(embedUrl)}&_=${bust}`,
+  const hit = streamMemo.get(embedUrl);
+  if (hit && Date.now() - hit.at < STREAM_MEMO_MS) return hit.promise;
+
+  const promise = request<StreamInfo>(
+    `/api/stream?embed=${encodeURIComponent(embedUrl)}`,
     true,
     timeoutMs,
-  );
+  ).catch((err) => {
+    streamMemo.delete(embedUrl);
+    throw err;
+  });
+
+  streamMemo.set(embedUrl, { at: Date.now(), promise });
+  return promise;
 }
 
 export function toPlayableUrl(stream: StreamInfo): string {
@@ -208,13 +219,19 @@ export function heroImageUrl(banner?: string, poster?: string) {
   return bannerUrl(banner) || posterUrl(poster || '');
 }
 
-export function prefetchAnime(id: string) {
+export function prefetchAnime(id: string, urgent = false) {
   const key = `prefetch:anime:${id}`;
+  const job = async () => {
+    await Promise.all([getAnime(id), getEpisodes(id)]);
+  };
+  if (urgent) {
+    prefetchKeys.add(key);
+    void job().catch(() => undefined);
+    return;
+  }
   if (prefetchKeys.has(key)) return;
   prefetchKeys.add(key);
-  enqueuePrefetch(async () => {
-    await Promise.all([getAnime(id), getEpisodes(id)]);
-  });
+  enqueuePrefetch(job);
 }
 
 export function prefetchResolve(query: string, path?: string) {
@@ -230,9 +247,14 @@ export function prefetchStream(embedUrl: string) {
   const key = `prefetch:stream:${embedUrl}`;
   if (prefetchKeys.has(key)) return;
   prefetchKeys.add(key);
-  enqueuePrefetch(async () => {
-    await resolveStream(embedUrl);
-  });
+  void (async () => {
+    try {
+      const stream = await resolveStream(embedUrl);
+      await fetch(toPlayableUrl(stream)).catch(() => undefined);
+    } catch {
+      prefetchKeys.delete(key);
+    }
+  })();
 }
 
 export function navigateToAnimeId(

@@ -30,7 +30,10 @@ export default function AnimeCard({ item, className = '' }: Props) {
   }
 
   function play() {
-    warmPlay();
+    prefetchAnime(item.id, true);
+    warmPoster(item.poster);
+    const entry = getHistory(item.id);
+    prefetchWatchStream(item.id, entry?.version, entry?.episode);
     navigate(playPath(item.id));
   }
 
@@ -43,6 +46,7 @@ export default function AnimeCard({ item, className = '' }: Props) {
           onClick={play}
           onMouseEnter={warmPlay}
           onFocus={warmPlay}
+          onPointerDown={warmPlay}
           aria-label={`Lire ${item.title}`}
         >
           <div className="anime-card-poster">
