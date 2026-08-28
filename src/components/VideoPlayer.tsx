@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import { toSubtitleUrl, type SubtitleTrack } from '../lib/api';
 
@@ -66,18 +66,7 @@ function enableFrenchSubtitles(video: HTMLVideoElement) {
       return;
     }
   }
-  if (tracks.length > 0) {
-    tracks[0].mode = 'showing';
-  }
-}
-
-function pickFrenchAudio(hls: Hls) {
-  const index = hls.audioTracks.findIndex((track) => {
-    const lang = (track.lang || '').toLowerCase();
-    const name = (track.name || '').toLowerCase();
-    return lang.startsWith('fr') || name.includes('français') || name.includes('french');
-  });
-  if (index >= 0) hls.audioTrack = index;
+  if (tracks.length > 0) tracks[0].mode = 'showing';
 }
 
 export default function VideoPlayer({
@@ -89,47 +78,22 @@ export default function VideoPlayer({
   autoPlay = true,
   startAt = 0,
   onProgress,
-  subtitles = [],
+  subtitles = EMPTY_SUBS,
   subtitleReferer = '',
   showSubtitles = false,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
-  const startAtRef = useRef(startAt);
-  const autoPlayRef = useRef(autoPlay);
-  startAtRef.current = startAt;
-  autoPlayRef.current = autoPlay;
+  const onProgressRef = useRef(onProgress);
+  onProgressRef.current = onProgress;
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const activeSubtitles = useMemo(
-    () => (showSubtitles ? subtitles : EMPTY_SUBS),
-    [showSubtitles, subtitles],
-  );
+  const activeSubtitles = showSubtitles ? subtitles : EMPTY_SUBS;
 
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !showSubtitles || !activeSubtitles.length) return;
-
-    function apply() {
-      enableFrenchSubtitles(video!);
-    }
-
-    apply();
-    video.textTracks.addEventListener('addtrack', apply);
-    video.addEventListener('loadedmetadata', apply);
-    video.addEventListener('canplay', apply);
-
-    return () => {
-      video.textTracks.removeEventListener('addtrack', apply);
-      video.removeEventListener('loadedmetadata', apply);
-      video.removeEventListener('canplay', apply);
-    };
-  }, [src, showSubtitles, activeSubtitles]);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !src || loading) return;
+    if (!video || loading || !src) return;
 
     setReady(false);
     setError(null);
@@ -139,24 +103,22 @@ export default function VideoPlayer({
       hlsRef.current = null;
     }
 
-    const onReady = () => {
-      setReady(true);
-      const resume = startAtRef.current;
-      if (resume > 0 && resume < (video.duration || Infinity)) {
-        video.currentTime = resume;
-      }
-      if (autoPlayRef.current) tryPlay(video);
-    };
-
     const fail = (message: string) => {
       setError(message);
-      setReady(false);
     };
 
-    const readyTimer = window.setTimeout(() => {
-      if (!videoRef.current || videoRef.current !== video) return;
-      fail('Chargement trop long — réessaie ou change de lecteur.');
-    }, 18000);
+    const onReady = () => {
+      setReady(true);
+      if (startAt > 8) {
+        try {
+          video.currentTime = startAt;
+        } catch {
+          /* ignore */
+        }
+      }
+      if (showSubtitles && activeSubtitles.length) enableFrenchSubtitles(video);
+      if (autoPlay) tryPlay(video);
+    };
 
     const useHls = isHls || src.includes('.m3u8') || src.includes('/api/proxy');
 
@@ -166,88 +128,38 @@ export default function VideoPlayer({
         enableWorker: true,
         lowLatencyMode: false,
         backBufferLength: 90,
-        maxBufferLength: 90,
-        maxMaxBufferLength: 600,
-        maxBufferSize: 120 * 1000 * 1000,
-        maxBufferHole: 0.5,
+        maxBufferLength: 60,
         startLevel: -1,
-        fragLoadingTimeOut: 20000,
-        manifestLoadingTimeOut: 15000,
-        levelLoadingTimeOut: 15000,
       });
-
       hls.loadSource(src);
       hls.attachMedia(video);
-
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        pickFrenchAudio(hls);
-        window.clearTimeout(readyTimer);
-        onReady();
-      });
-
-      hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => {
-        pickFrenchAudio(hls);
-      });
-
+      hls.on(Hls.Events.MANIFEST_PARSED, onReady);
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (!data.fatal) return;
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR && retries < 3) {
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR && retries < 2) {
           retries += 1;
           hls.startLoad();
           return;
         }
-        if (data.type === Hls.ErrorTypes.MEDIA_ERROR && retries < 3) {
+        if (data.type === Hls.ErrorTypes.MEDIA_ERROR && retries < 2) {
           retries += 1;
           hls.recoverMediaError();
           return;
         }
-        setError('Erreur de lecture — change de lecteur ou recharge la page.');
-        window.clearTimeout(readyTimer);
-        hls.destroy();
-        hlsRef.current = null;
+        fail('Impossible de lire ce flux.');
       });
-
       hlsRef.current = hls;
     } else if (useHls && video.canPlayType('application/vnd.apple.mpegurl')) {
       video.src = src;
-      video.addEventListener(
-        'loadedmetadata',
-        () => {
-          window.clearTimeout(readyTimer);
-          onReady();
-        },
-        { once: true },
-      );
-      video.addEventListener(
-        'error',
-        () => {
-          window.clearTimeout(readyTimer);
-          fail('Erreur de lecture du flux.');
-        },
-        { once: true },
-      );
+      video.addEventListener('loadedmetadata', onReady, { once: true });
+      video.addEventListener('error', () => fail('Impossible de lire ce flux.'), { once: true });
     } else {
       video.src = src;
-      video.addEventListener(
-        'canplay',
-        () => {
-          window.clearTimeout(readyTimer);
-          onReady();
-        },
-        { once: true },
-      );
-      video.addEventListener(
-        'error',
-        () => {
-          window.clearTimeout(readyTimer);
-          fail('Erreur de lecture du flux.');
-        },
-        { once: true },
-      );
+      video.addEventListener('canplay', onReady, { once: true });
+      video.addEventListener('error', () => fail('Impossible de lire cette vidéo.'), { once: true });
     }
 
     return () => {
-      window.clearTimeout(readyTimer);
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
@@ -256,36 +168,31 @@ export default function VideoPlayer({
       video.removeAttribute('src');
       video.load();
     };
-  }, [src, loading, isHls]);
+  }, [src, loading, isHls, autoPlay, startAt]);
 
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !onProgress || !src || loading) return;
-
-    const report = () => {
-      if (video.currentTime >= 0) {
-        onProgress(video.currentTime, video.duration || 0);
-      }
-    };
-
-    video.addEventListener('timeupdate', report);
+    if (!video || !src) return;
+    const emit = () => onProgressRef.current?.(video.currentTime, video.duration || 0);
+    video.addEventListener('timeupdate', emit);
+    video.addEventListener('pause', emit);
+    video.addEventListener('ended', emit);
     return () => {
-      video.removeEventListener('timeupdate', report);
+      video.removeEventListener('timeupdate', emit);
+      video.removeEventListener('pause', emit);
+      video.removeEventListener('ended', emit);
     };
-  }, [src, loading, onProgress]);
-
-  const needsCrossOrigin = showSubtitles && activeSubtitles.length > 0;
+  }, [src]);
 
   if (loading) {
     return (
       <div className="player-empty player-loading-state">
         <div className="spinner" />
-        <p>Chargement du flux...</p>
       </div>
     );
   }
 
-  if (embedUrl && !src) {
+  if (!src && embedUrl) {
     return (
       <div className="player-wrapper embed-player">
         {showSubtitles && (
@@ -307,19 +214,16 @@ export default function VideoPlayer({
     );
   }
 
-  if (error) {
-    return (
-      <div className="player-empty player-empty--warn">
-        <p>{error}</p>
-      </div>
-    );
-  }
-
   return (
     <div className="player-wrapper">
-      {!ready && (
+      {!ready && !error && (
         <div className="player-buffer">
           <div className="spinner" />
+        </div>
+      )}
+      {error && (
+        <div className="player-empty player-empty--warn player-error-overlay">
+          <p>{error}</p>
         </div>
       )}
       <video
@@ -329,9 +233,8 @@ export default function VideoPlayer({
         autoPlay={autoPlay}
         muted={autoPlay}
         playsInline
-        {...(needsCrossOrigin ? { crossOrigin: 'anonymous' as const } : {})}
+        crossOrigin={showSubtitles && activeSubtitles.length ? 'anonymous' : undefined}
         controlsList="nodownload noremoteplayback"
-        disableRemotePlayback
         className={`native-player ${ready ? 'ready' : ''}`}
       >
         {activeSubtitles.map((track, index) => (

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import VideoPlayer from '../components/VideoPlayer';
 import {
@@ -25,24 +25,15 @@ import {
 import { getAvailableVersions, getEpisodeKeys } from '../lib/episodes';
 import { flushHistory, getHistory, recordProgress } from '../lib/history';
 import { saveWatchSession } from '../lib/watchSession';
-import { prefetchWatchStream } from '../lib/watchPrefetch';
 import type { AnimeDetail, EpisodesData, Version } from '../types';
 
-const STREAM_TIMEOUT_MS = 9000;
+/** Court exprès : on préfère basculer vite sur un autre lecteur qu'attendre. */
+const STREAM_TIMEOUT_MS = 4500;
 
 const VERSION_LABELS: Record<Version, string> = {
   vf: 'VF',
   vostfr: 'VO',
 };
-
-function resolveStreamWithTimeout(embed: string) {
-  return Promise.race([
-    resolveStream(embed),
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('timeout')), STREAM_TIMEOUT_MS),
-    ),
-  ]);
-}
 
 function pickInitialWatchState(
   id: string | undefined,
@@ -104,17 +95,7 @@ export default function Watch() {
   const urlPlayer = searchParams.get('player');
 
   const initialCachedEpisodes = id ? getCachedEpisodes(id) : null;
-  const initialWatch = pickInitialWatchState(id, initialCachedEpisodes, urlEpisode, urlVersion, urlPlayer);
-  const savedHistory = id ? getHistory(id) : undefined;
-  const startAt =
-    requestedT ||
-    (savedHistory &&
-    savedHistory.episode === initialWatch.episode &&
-    savedHistory.version === initialWatch.version &&
-    !savedHistory.completed
-      ? savedHistory.position
-      : 0);
-  const posRef = useRef(startAt);
+  const posRef = useRef(0);
 
   const [detail, setDetail] = useState<AnimeDetail | null>(() => (id ? getCachedAnime(id) : null));
   const [episodes, setEpisodes] = useState<EpisodesData | null>(() => initialCachedEpisodes);
@@ -127,7 +108,6 @@ export default function Watch() {
   const [pageLoading, setPageLoading] = useState(() => !(id && getCachedAnime(id) && getCachedEpisodes(id)));
   const [error, setError] = useState<string | null>(null);
   const [showEpisodes, setShowEpisodes] = useState(false);
-  const [streamRetry, setStreamRetry] = useState(0);
 
   const watchState = useMemo(() => {
     const eps = episodes || initialCachedEpisodes;
@@ -144,6 +124,15 @@ export default function Watch() {
   }, [id, episodes, initialCachedEpisodes, urlEpisode, urlVersion, urlPlayer]);
 
   const { version, episode, player } = watchState;
+
+  const startPosition = useMemo(() => {
+    if (requestedT > 0) return requestedT;
+    if (!id) return 0;
+    const entry = getHistory(id);
+    if (!entry || entry.completed) return 0;
+    if (entry.episode !== episode || entry.version !== version) return 0;
+    return entry.position;
+  }, [id, episode, version, requestedT]);
 
   useLayoutEffect(() => {
     window.scrollTo(0, 0);
@@ -232,99 +221,123 @@ export default function Watch() {
     () => getAvailablePlayers(currentEpisodeData || {}),
     [currentEpisodeData],
   );
+  const sourcesKey = useMemo(
+    () =>
+      availablePlayers
+        .map((source) => `${source}:${getSourceCode(currentEpisodeData || {}, source) || ''}`)
+        .join('|'),
+    [availablePlayers, currentEpisodeData],
+  );
+
+  const skipPlayerReload = useRef(false);
+  const streamGen = useRef(0);
 
   useEffect(() => {
     if (!episodes || pageLoading || !availablePlayers.length) return;
     if (availablePlayers.includes(player)) return;
+    skipPlayerReload.current = true;
     setSearchParams(
       (prev) => {
         const params = new URLSearchParams(prev);
-        params.set('player', pickPreferredPlayer(availablePlayers));
+        params.set('player', availablePlayers[0]);
         return params;
       },
       { replace: true },
     );
   }, [availablePlayers, player, episodes, pageLoading, setSearchParams]);
 
-  useEffect(() => {
-    if (!id || pageLoading) return;
-    prefetchWatchStream(id, version, episode);
-  }, [id, version, episode, pageLoading]);
+  const loadStream = useCallback(async () => {
+    const gen = ++streamGen.current;
+    const sources = currentEpisodeData;
+    const players = sources ? getAvailablePlayers(sources) : [];
 
-  useEffect(() => {
-    if (pageLoading || !currentEpisodeData || !availablePlayers.length) {
+    if (!sources || !players.length) {
+      if (gen !== streamGen.current) return;
       setPlayUrl('');
       setStreamInfo(null);
       setEmbedUrl('');
       setStreamLoading(false);
-      if (!pageLoading) {
-        setStreamError(
-          !currentEpisodeData
+      setStreamError(
+        pageLoading
+          ? null
+          : !sources
             ? `Aucune source ${VERSION_LABELS[version]} pour cet épisode.`
             : `Aucun lecteur disponible en ${VERSION_LABELS[version]}.`,
-        );
-      }
+      );
       return;
     }
 
-    let cancelled = false;
+    const playersToTry = players.includes(player)
+      ? [player, ...players.filter((item) => item !== player)]
+      : players;
+
     setStreamError(null);
-    setPlayUrl('');
-    setStreamInfo(null);
-    setEmbedUrl('');
     setStreamLoading(true);
 
-    const playersToTry = availablePlayers.includes(player)
-      ? [player, ...availablePlayers.filter((p) => p !== player)]
-      : availablePlayers;
+    let iframeFallback = '';
 
-    async function resolvePlayback() {
-      let iframeFallback = '';
+    for (const source of playersToTry) {
+      const code = getSourceCode(sources, source);
+      const embed = getEmbedUrl(source, code);
+      if (!embed) continue;
 
-      for (const source of playersToTry) {
-        if (cancelled) return;
-
-        const code = getSourceCode(currentEpisodeData!, source);
-        const embed = getEmbedUrl(source, code);
-        if (!embed) continue;
-
-        if (usesIframeFallback(source)) {
-          if (!iframeFallback) iframeFallback = embed;
-          continue;
-        }
-
-        try {
-          const stream = await resolveStreamWithTimeout(embed);
-          if (cancelled) return;
-
-          setPlayUrl(toPlayableUrl(stream));
-          setStreamInfo(stream);
-          setStreamIsHls(stream.type === 'hls' || isHlsPlayer(stream.player));
-          setStreamLoading(false);
-          return;
-        } catch {
-          continue;
-        }
+      if (usesIframeFallback(source)) {
+        if (!iframeFallback) iframeFallback = embed;
+        continue;
       }
 
-      if (cancelled) return;
-
-      if (iframeFallback) {
-        setEmbedUrl(iframeFallback);
+      try {
+        const stream = await resolveStream(embed, STREAM_TIMEOUT_MS);
+        if (gen !== streamGen.current) return;
+        setPlayUrl(toPlayableUrl(stream));
+        setStreamInfo(stream);
+        setStreamIsHls(stream.type === 'hls' || isHlsPlayer(stream.player));
+        setEmbedUrl('');
+        if (source !== player) {
+          skipPlayerReload.current = true;
+          setSearchParams(
+            (prev) => {
+              const params = new URLSearchParams(prev);
+              params.set('player', source);
+              return params;
+            },
+            { replace: true },
+          );
+        }
         setStreamLoading(false);
         return;
+      } catch {
+        continue;
       }
-
-      setStreamError('Impossible de charger le flux — essaie un autre lecteur.');
-      setStreamLoading(false);
     }
 
-    void resolvePlayback();
+    if (gen !== streamGen.current) return;
 
-    return () => {
-      cancelled = true;
-    };
-  }, [pageLoading, currentEpisodeData, availablePlayers, player, version, episode, id, streamRetry]);
+    const userWantsIframe = usesIframeFallback(player) && iframeFallback;
+    if (userWantsIframe) {
+      setEmbedUrl(iframeFallback);
+      setPlayUrl('');
+      setStreamInfo(null);
+      setStreamLoading(false);
+      return;
+    }
+
+    setEmbedUrl(iframeFallback || '');
+    setPlayUrl('');
+    setStreamInfo(null);
+    setStreamLoading(false);
+    if (!iframeFallback) {
+      setStreamError('Impossible de charger le flux — essaie un autre lecteur.');
+    }
+  }, [currentEpisodeData, player, version, pageLoading, setSearchParams]);
+
+  useEffect(() => {
+    if (skipPlayerReload.current) {
+      skipPlayerReload.current = false;
+      return;
+    }
+    void loadStream();
+  }, [loadStream, sourcesKey, episode, version]);
 
   useEffect(() => {
     if (!currentEpisodeData || !availablePlayers.length) return;
@@ -343,8 +356,8 @@ export default function Watch() {
   }, [episode, version, episodeKeys, episodes, currentEpisodeData, availablePlayers, player]);
 
   useEffect(() => {
-    posRef.current = startAt;
-  }, [id, episode, version, startAt]);
+    posRef.current = startPosition;
+  }, [id, episode, version, startPosition]);
 
   useEffect(() => {
     if (!id || !detail) return;
@@ -412,7 +425,7 @@ export default function Watch() {
     applyWatch({
       version: next,
       episode: nextEpisode,
-      player: pickPreferredPlayer(nextPlayers),
+      player: nextPlayers[0] || player,
     });
   }
 
@@ -455,7 +468,7 @@ export default function Watch() {
             loading={false}
             isHls={streamIsHls}
             autoPlay={shouldAutoplay}
-            startAt={startAt}
+            startAt={startPosition}
             subtitles={streamInfo?.subtitles}
             subtitleReferer={streamInfo?.referer}
             showSubtitles={version === 'vostfr'}
@@ -478,7 +491,7 @@ export default function Watch() {
             <button
               type="button"
               className="sama-link-btn"
-              onClick={() => setStreamRetry((n) => n + 1)}
+              onClick={() => void loadStream()}
             >
               Réessayer
             </button>
@@ -489,7 +502,7 @@ export default function Watch() {
             <button
               type="button"
               className="sama-link-btn"
-              onClick={() => setStreamRetry((n) => n + 1)}
+              onClick={() => void loadStream()}
             >
               Réessayer
             </button>

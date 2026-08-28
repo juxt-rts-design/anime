@@ -125,7 +125,6 @@ export function getAvailablePlayers(sources: EpisodeSources | Record<string, str
 }
 
 export function pickPreferredPlayer(available: PlayerType[]): PlayerType {
-  if (available.includes('vidzy')) return 'vidzy';
   return available[0] || 'vidzy';
 }
 

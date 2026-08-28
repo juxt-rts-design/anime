@@ -219,16 +219,23 @@ function rewriteM3u8(body, targetUrl, referer) {
     .join('\n');
 }
 
-export async function proxyMedia(targetUrl, referer) {
-  const response = await fetch(targetUrl, {
-    headers: {
-      'User-Agent': USER_AGENT,
-      Referer: referer || '',
-      Origin: referer ? new URL(referer).origin : undefined,
-    },
-  });
+export async function proxyMedia(targetUrl, referer, req, res) {
+  const headers = {
+    'User-Agent': USER_AGENT,
+    Referer: referer || '',
+    Accept: '*/*',
+  };
+  if (referer) {
+    try {
+      headers.Origin = new URL(referer).origin;
+    } catch {
+      /* ignore */
+    }
+  }
+  if (req.headers.range) headers.Range = req.headers.range;
 
-  if (!response.ok) {
+  const response = await fetch(targetUrl, { headers, redirect: 'follow' });
+  if (!response.ok && response.status !== 206) {
     throw new Error(`Proxy error ${response.status}`);
   }
 
@@ -238,25 +245,34 @@ export async function proxyMedia(targetUrl, referer) {
     contentType.includes('mpegurl') ||
     contentType.includes('x-mpegURL');
 
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+
   if (isPlaylist) {
-    const body = await response.text();
-    return {
-      body: rewriteM3u8(body, targetUrl, referer),
-      contentType: 'application/vnd.apple.mpegurl',
-      binary: false,
-    };
+    const body = rewriteM3u8(await response.text(), targetUrl, referer);
+    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+    res.status(200).send(body);
+    return;
   }
 
-  const buffer = Buffer.from(await response.arrayBuffer());
-  const isTextTrack =
-    targetUrl.includes('.vtt') ||
-    targetUrl.includes('.srt') ||
-    contentType.includes('text/vtt') ||
-    contentType.includes('text/plain');
+  res.status(response.status);
+  for (const name of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
+    const value = response.headers.get(name);
+    if (value) res.setHeader(name, value);
+  }
+  if (!res.getHeader('content-type')) {
+    const isTextTrack =
+      targetUrl.includes('.vtt') ||
+      targetUrl.includes('.srt') ||
+      contentType.includes('text/vtt');
+    res.setHeader('Content-Type', isTextTrack ? 'text/vtt; charset=utf-8' : contentType || 'application/octet-stream');
+  }
 
-  return {
-    body: buffer,
-    contentType: isTextTrack ? 'text/vtt; charset=utf-8' : contentType || 'application/octet-stream',
-    binary: true,
-  };
+  if (!response.body) {
+    res.end();
+    return;
+  }
+
+  const { Readable } = await import('node:stream');
+  Readable.fromWeb(response.body).pipe(res);
 }

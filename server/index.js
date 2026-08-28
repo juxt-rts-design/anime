@@ -202,17 +202,9 @@ app.get('/api/proxy', async (req, res) => {
     if (!targetUrl.startsWith('http')) {
       return res.status(400).json({ error: 'URL invalide' });
     }
-
-    const { body, contentType, binary } = await proxyMedia(targetUrl, referer);
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-    if (binary) {
-      res.send(body);
-    } else {
-      res.send(body);
-    }
+    await proxyMedia(targetUrl, referer, req, res);
   } catch (error) {
+    if (res.headersSent) return;
     res.status(502).json({ error: error.message });
   }
 });
