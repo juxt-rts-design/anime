@@ -57,11 +57,12 @@ app.get('/api/home', async (_req, res) => {
 app.get('/api/category/*', async (req, res) => {
   try {
     const categoryPath = '/' + req.params[0];
-    const items = await cached(`cat:${categoryPath}`, TTL.category, () =>
-      getCategoryContent(categoryPath),
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const items = await cached(`cat:${categoryPath}:${page}`, TTL.category, () =>
+      getCategoryContent(categoryPath, page),
     );
     res.setHeader('Cache-Control', 'public, max-age=300');
-    res.json({ items });
+    res.json({ items, page });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

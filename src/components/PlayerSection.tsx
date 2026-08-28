@@ -21,6 +21,8 @@ interface Props {
   streamLoading: boolean;
   streamIsHls: boolean;
   autoPlay?: boolean;
+  startAt?: number;
+  onProgress?: (position: number, duration: number) => void;
   availablePlayers: PlayerType[];
   onVersionChange: (v: Version) => void;
   onEpisodeChange: (ep: string) => void;
@@ -59,6 +61,8 @@ export default function PlayerSection({
   streamLoading,
   streamIsHls,
   autoPlay = true,
+  startAt = 0,
+  onProgress,
   availablePlayers,
   onVersionChange,
   onEpisodeChange,
@@ -208,6 +212,8 @@ export default function PlayerSection({
             loading={streamLoading}
             isHls={streamIsHls}
             autoPlay={autoPlay}
+            startAt={startAt}
+            onProgress={onProgress}
             subtitles={streamInfo?.subtitles}
             subtitleReferer={streamInfo?.referer}
             showSubtitles={version === 'vostfr'}

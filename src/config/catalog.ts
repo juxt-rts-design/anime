@@ -73,3 +73,44 @@ export function getSectionById(id: ContentTab): CatalogSection {
 export function getGenreById(id: string): GenreItem | undefined {
   return GENRES.find((g) => g.id === id);
 }
+
+export const CATALOG_ROW_TITLES: Record<string, string[]> = {
+  films: ['Films du moment', 'À l’affiche', 'Encore plus de films', 'Catalogue films'],
+  series: ['Séries du moment', 'À ne pas manquer', 'Encore plus de séries', 'Catalogue séries'],
+};
+
+/** Genres affichés en rangées horizontales sur les onglets Films / Séries */
+export const CATALOG_GENRE_ROWS: Record<'films' | 'series', string[]> = {
+  films: ['action', 'aventure', 'fantastique', 'comedie', 'drame', 'sf'],
+  series: ['action', 'shounen', 'isekai', 'romance', 'drame', 'fantasy'],
+};
+
+export const HOME_GENRE_ROWS = [
+  'action',
+  'aventure',
+  'comedie',
+  'romance',
+  'fantastique',
+  'shounen',
+  'isekai',
+  'drame',
+  'mystere',
+  'seinen',
+];
+
+export function chunkItems<T>(items: T[], size: number): T[][] {
+  const rows: T[][] = [];
+  for (let i = 0; i < items.length; i += size) rows.push(items.slice(i, i + size));
+  return rows;
+}
+
+export function homeSeeAllTo(title: string) {
+  const text = title.toLowerCase();
+  if (text.includes('série') || text.includes('serie')) return '/?tab=series';
+  if (text.includes('film')) return '/?tab=films';
+  const genre = GENRES.find(
+    (entry) => text.includes(entry.label.toLowerCase()) || text.includes(entry.id),
+  );
+  if (genre) return `/?tab=genres&genre=${genre.id}`;
+  return '/?tab=anime';
+}

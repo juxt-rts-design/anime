@@ -94,7 +94,33 @@ export function IconClose({ className }: IconProps) {
   );
 }
 
-export type NavIconName = 'anime' | 'films' | 'series' | 'genres' | 'planning' | 'search';
+export function IconList({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M8 7h12M8 12h12M8 17h12" />
+      <path d="M5 7h.01M5 12h.01M5 17h.01" />
+    </Svg>
+  );
+}
+
+export function IconHistory({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <circle cx="12" cy="12" r="8" />
+      <path d="M12 8v4l3 2" />
+    </Svg>
+  );
+}
+
+export type NavIconName =
+  | 'anime'
+  | 'films'
+  | 'series'
+  | 'genres'
+  | 'planning'
+  | 'search'
+  | 'liste'
+  | 'historique';
 
 const NAV_ICON_MAP = {
   anime: IconAnime,
@@ -103,6 +129,8 @@ const NAV_ICON_MAP = {
   genres: IconGenres,
   planning: IconPlanning,
   search: IconSearch,
+  liste: IconList,
+  historique: IconHistory,
 } as const;
 
 export function NavIcon({ name, className = 'h-5 w-5' }: { name: NavIconName; className?: string }) {

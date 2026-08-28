@@ -161,7 +161,7 @@ export default function Planning() {
   }
 
   return (
-    <div className="planning-page mx-auto max-w-[1440px] px-4 pb-12 pt-6 sm:px-5 md:px-6 md:pb-16 md:pt-7">
+    <div className="planning-page mx-auto max-w-[1440px] px-4 pb-12 sm:px-5 md:px-6 md:pb-16">
       <header className="planning-header mb-6 md:mb-7">
         <h1 className="font-display mb-2 text-2xl font-extrabold sm:text-3xl md:text-4xl">
           Planning des sorties

@@ -8,7 +8,7 @@ interface Props {
 export default function GenreBar({ activeGenre, onSelect }: Props) {
   return (
     <div className="genre-bar">
-      <div className="genre-bar-inner -mx-1 flex gap-2 overflow-x-auto px-1 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div className="genre-bar-inner">
         <button
           type="button"
           className={`genre-chip ${activeGenre === null ? 'active' : ''}`}

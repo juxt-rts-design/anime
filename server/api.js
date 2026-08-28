@@ -152,8 +152,10 @@ async function getHomeContent() {
   return parseHomeItems(html);
 }
 
-async function getCategoryContent(path) {
-  const response = await fetchFromApi(path);
+async function getCategoryContent(path, page = 1) {
+  const base = path.replace(/^\//, '').replace(/\/$/, '');
+  const fetchPath = page > 1 ? `/${base}/page/${page}/` : `/${base}/`;
+  const response = await fetchFromApi(fetchPath);
   const html = await response.text();
   return parseHomeItems(html);
 }

@@ -1,7 +1,8 @@
 import type { PlayerType } from './players';
 import type { Version } from '../types';
 
-const PREFIX = 'juxt-watch:';
+const PREFIX = 'juxt-senpai:watch:';
+const LEGACY_PREFIX = 'juxt-watch:';
 
 export interface WatchSession {
   version: Version;
@@ -14,9 +15,23 @@ function key(id: string) {
   return `${PREFIX}${id}`;
 }
 
+function readRaw(id: string): string | null {
+  try {
+    let raw = localStorage.getItem(key(id));
+    if (raw) return raw;
+    raw = sessionStorage.getItem(`${LEGACY_PREFIX}${id}`);
+    if (!raw) return null;
+    localStorage.setItem(key(id), raw);
+    sessionStorage.removeItem(`${LEGACY_PREFIX}${id}`);
+    return raw;
+  } catch {
+    return null;
+  }
+}
+
 export function loadWatchSession(id: string): WatchSession | null {
   try {
-    const raw = sessionStorage.getItem(key(id));
+    const raw = readRaw(id);
     if (!raw) return null;
     return JSON.parse(raw) as WatchSession;
   } catch {
@@ -26,7 +41,7 @@ export function loadWatchSession(id: string): WatchSession | null {
 
 export function saveWatchSession(id: string, data: WatchSession) {
   try {
-    sessionStorage.setItem(key(id), JSON.stringify(data));
+    localStorage.setItem(key(id), JSON.stringify(data));
   } catch {
     /* quota / mode privé */
   }
@@ -34,7 +49,8 @@ export function saveWatchSession(id: string, data: WatchSession) {
 
 export function clearWatchSession(id: string) {
   try {
-    sessionStorage.removeItem(key(id));
+    localStorage.removeItem(key(id));
+    sessionStorage.removeItem(`${LEGACY_PREFIX}${id}`);
   } catch {
     /* ignore */
   }

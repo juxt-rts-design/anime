@@ -1,17 +1,17 @@
-import type { AnimeDetail, AnimeItem, EpisodesData, PlanningData, Season } from './types';
+import type { AnimeDetail, AnimeItem, EpisodesData, PlanningData, Season } from '../types';
 import type { PlayerType } from './players';
 import { cachedFetch, readCache, writeCache } from './clientCache';
 import { enqueuePrefetch } from './prefetchQueue';
 
 const TTL = {
-  home: 5 * 60 * 1000,
-  category: 10 * 60 * 1000,
-  search: 10 * 60 * 1000,
-  resolve: 20 * 60 * 1000,
-  anime: 20 * 60 * 1000,
-  episodes: 15 * 60 * 1000,
-  seasons: 30 * 60 * 1000,
-  planning: 30 * 60 * 1000,
+  home: 6 * 60 * 60 * 1000,
+  category: 12 * 60 * 60 * 1000,
+  search: 2 * 60 * 60 * 1000,
+  resolve: 12 * 60 * 60 * 1000,
+  anime: 24 * 60 * 60 * 1000,
+  episodes: 12 * 60 * 60 * 1000,
+  seasons: 24 * 60 * 60 * 1000,
+  planning: 6 * 60 * 60 * 1000,
 };
 
 const prefetchKeys = new Set<string>();
@@ -54,11 +54,31 @@ export function getHome() {
   return cachedFetch('home', TTL.home, () => request<{ items: AnimeItem[] }>('/api/home'));
 }
 
-export function getCategory(path: string) {
-  const key = `cat:${path}`;
+export function getCategory(path: string, page = 1) {
+  const clean = path.replace(/^\//, '');
+  const key = `cat:${clean}:${page}`;
+  const qs = page > 1 ? `?page=${page}` : '';
   return cachedFetch(key, TTL.category, () =>
-    request<{ items: AnimeItem[] }>(`/api/category/${path.replace(/^\//, '')}`),
+    request<{ items: AnimeItem[] }>(`/api/category/${clean}${qs}`),
   );
+}
+
+export async function getCategoryMany(path: string, pages = 8) {
+  const batches = await Promise.all(
+    Array.from({ length: pages }, (_, index) =>
+      getCategory(path, index + 1).catch(() => ({ items: [] as AnimeItem[] })),
+    ),
+  );
+  const seen = new Set<string>();
+  const items: AnimeItem[] = [];
+  for (const batch of batches) {
+    for (const item of batch.items) {
+      if (!item.id || seen.has(item.id)) continue;
+      seen.add(item.id);
+      items.push(item);
+    }
+  }
+  return items;
 }
 
 export function search(query: string, page = 1) {
@@ -187,7 +207,7 @@ export function bannerUrl(banner?: string) {
 }
 
 export function heroImageUrl(banner?: string, poster?: string) {
-  return bannerUrl(banner) || posterUrl(poster);
+  return bannerUrl(banner) || posterUrl(poster || '');
 }
 
 export function prefetchAnime(id: string) {

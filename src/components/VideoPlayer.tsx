@@ -9,6 +9,8 @@ interface Props {
   loading?: boolean;
   isHls?: boolean;
   autoPlay?: boolean;
+  startAt?: number;
+  onProgress?: (position: number, duration: number) => void;
   subtitles?: SubtitleTrack[];
   subtitleReferer?: string;
   showSubtitles?: boolean;
@@ -51,6 +53,8 @@ export default function VideoPlayer({
   loading,
   isHls = false,
   autoPlay = true,
+  startAt = 0,
+  onProgress,
   subtitles = [],
   subtitleReferer = '',
   showSubtitles = false,
@@ -62,6 +66,26 @@ export default function VideoPlayer({
   const [error, setError] = useState<string | null>(null);
 
   const activeSubtitles = showSubtitles ? subtitles : [];
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !showSubtitles || !activeSubtitles.length) return;
+
+    function apply() {
+      enableFrenchSubtitles(video!);
+    }
+
+    apply();
+    video.textTracks.addEventListener('addtrack', apply);
+    video.addEventListener('loadedmetadata', apply);
+    video.addEventListener('canplay', apply);
+
+    return () => {
+      video.textTracks.removeEventListener('addtrack', apply);
+      video.removeEventListener('loadedmetadata', apply);
+      video.removeEventListener('canplay', apply);
+    };
+  }, [src, showSubtitles, activeSubtitles]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -77,6 +101,9 @@ export default function VideoPlayer({
 
     const onReady = () => {
       setReady(true);
+      if (startAt > 0 && startAt < (video.duration || Infinity)) {
+        video.currentTime = startAt;
+      }
       if (showSubtitles && activeSubtitles.length) {
         enableFrenchSubtitles(video);
       }
@@ -125,7 +152,23 @@ export default function VideoPlayer({
         hlsRef.current = null;
       }
     };
-  }, [src, loading, isHls, autoPlay, showSubtitles, activeSubtitles.length]);
+  }, [src, loading, isHls, autoPlay, startAt, showSubtitles, activeSubtitles]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !onProgress || !src || loading) return;
+
+    const report = () => {
+      if (video.currentTime >= 0) {
+        onProgress(video.currentTime, video.duration || 0);
+      }
+    };
+
+    video.addEventListener('timeupdate', report);
+    return () => {
+      video.removeEventListener('timeupdate', report);
+    };
+  }, [src, loading, onProgress]);
 
   useEffect(() => {
     if (!autoPlay || !embedUrl || loading || src) return;
@@ -206,7 +249,7 @@ export default function VideoPlayer({
             src={toSubtitleUrl(track, subtitleReferer || track.url)}
             label={track.label}
             srcLang={track.language}
-            default={track.default}
+            default={track.default ?? index === 0}
           />
         ))}
       </video>

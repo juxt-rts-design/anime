@@ -1,3 +1,5 @@
+import type { EpisodeSources } from '../types';
+
 export const PLAYER_LABELS = {
   vidzy: 'Vidzy',
   luluvid: 'Luluvid',
@@ -71,11 +73,12 @@ const ALLOWED_HOSTS = [
 ];
 
 export function getSourceCode(
-  sources: Record<string, string | undefined>,
+  sources: EpisodeSources | Record<string, string | undefined>,
   player: PlayerType,
 ): string | undefined {
   const alias = SOURCE_KEYS[player];
-  return sources[alias || player];
+  const record = sources as Record<string, string | undefined>;
+  return record[alias || player];
 }
 
 export function isValidSource(value?: string): boolean {
@@ -117,7 +120,7 @@ export function isHlsPlayer(player: PlayerType): boolean {
   return HLS_PLAYERS.includes(player);
 }
 
-export function getAvailablePlayers(sources: Record<string, string | undefined>): PlayerType[] {
+export function getAvailablePlayers(sources: EpisodeSources | Record<string, string | undefined>): PlayerType[] {
   return PLAYER_ORDER.filter((player) => getEmbedUrl(player, getSourceCode(sources, player)));
 }
 

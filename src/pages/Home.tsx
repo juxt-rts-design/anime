@@ -1,129 +1,252 @@
 import { Link, useSearchParams } from 'react-router-dom';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import AnimeCard from '../components/AnimeCard';
+import { useCallback, useEffect, useState } from 'react';
+import AnimeRow from '../components/AnimeRow';
+import ContinueRow from '../components/ContinueRow';
+import FavoritesRow from '../components/FavoritesRow';
 import GenreBar from '../components/GenreBar';
-import Pagination, { PAGE_SIZE, paginateSlice, totalPagesFromCount } from '../components/Pagination';
-import SectionTabs from '../components/SectionTabs';
 import {
   ANIME_SUBSECTIONS,
+  CATALOG_GENRE_ROWS,
+  CATALOG_ROW_TITLES,
+  GENRES,
+  HOME_GENRE_ROWS,
+  chunkItems,
   getGenreById,
   getSectionById,
   type ContentTab,
 } from '../config/catalog';
-import { getCategory, getHome } from '../lib/api';
+import { browseCatalogPath, browseGenrePath } from '../lib/browse';
+import { browseCacheKey, getBrowseCache, setBrowseCache, type BrowseRow } from '../lib/browseCache';
+import { getCategoryMany, getHome, prefetchAnime } from '../lib/api';
+import { playPath } from '../lib/history';
+import { warmPosters } from '../lib/posters';
 import type { AnimeItem } from '../types';
 
-const GRID_CLASS =
-  'grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7';
+const ROW_SIZE = 32;
+const CATALOG_PAGES = 8;
 
-function SkeletonGrid({ count = 8 }: { count?: number }) {
+function SkeletonRows({ count = 3 }: { count?: number }) {
   return (
-    <div className={GRID_CLASS}>
+    <>
       {Array.from({ length: count }).map((_, i) => (
-        <div key={i} className="skeleton-card" />
+        <section className="nf-row" key={i} aria-hidden>
+          <div className="nf-row__head">
+            <div className="skeleton-line skeleton-line--title" />
+          </div>
+          <div className="media-row-scroller">
+            {Array.from({ length: 6 }).map((__, j) => (
+              <div className="media-row-item" key={j}>
+                <div className="skeleton-card" />
+              </div>
+            ))}
+          </div>
+        </section>
       ))}
-    </div>
+    </>
   );
+}
+
+function rowsFromItems(items: AnimeItem[], titles: string[], catPath: string): BrowseRow[] {
+  return chunkItems(items, ROW_SIZE)
+    .filter((chunk) => chunk.length > 0)
+    .map((chunk, index) => {
+      const rowTitle = titles[index] || titles[titles.length - 1] || 'Encore plus';
+      return {
+        title: rowTitle,
+        items: chunk,
+        seeAllTo: browseCatalogPath(catPath, rowTitle),
+      };
+    });
+}
+
+async function loadFilmsOrSeriesRows(tab: 'films' | 'series'): Promise<{ rows: BrowseRow[]; banner: AnimeItem[] }> {
+  const section = getSectionById(tab);
+  const genreIds = CATALOG_GENRE_ROWS[tab];
+
+  const [mainItems, ...genrePages] = await Promise.all([
+    getCategoryMany(section.apiPath, CATALOG_PAGES),
+    ...genreIds.map((genreId) => {
+      const genre = getGenreById(genreId);
+      if (!genre) return Promise.resolve([] as AnimeItem[]);
+      return getCategoryMany(genre.apiPath, 3).catch(() => [] as AnimeItem[]);
+    }),
+  ]);
+
+  const titles = CATALOG_ROW_TITLES[tab] || [section.label];
+  const seen = new Set(mainItems.map((item) => item.id));
+  const mainRows = rowsFromItems(mainItems, titles, section.apiPath);
+
+  const genreRows = genreIds
+    .map((genreId, index) => {
+      const genre = getGenreById(genreId);
+      if (!genre) return null;
+      const items = genrePages[index].filter((item) => !seen.has(item.id)).slice(0, ROW_SIZE);
+      if (items.length < 5) return null;
+      items.forEach((item) => seen.add(item.id));
+      return {
+        title: genre.label,
+        genreId: genre.id,
+        items,
+        seeAllTo: browseGenrePath(genre.id),
+      } as BrowseRow;
+    })
+    .filter((row): row is BrowseRow => row !== null);
+
+  const rows = [...mainRows, ...genreRows];
+  const banner = mainItems.slice(0, 8);
+
+  return { rows, banner };
 }
 
 export default function Home() {
   const [params, setParams] = useSearchParams();
   const activeTab = (params.get('tab') as ContentTab) || 'anime';
   const activeGenre = params.get('genre');
-  const page = Math.max(1, Number(params.get('page')) || 1);
 
   const [hero, setHero] = useState<AnimeItem | null>(null);
-  const [items, setItems] = useState<AnimeItem[]>([]);
-  const [animeSub, setAnimeSub] = useState<Record<string, AnimeItem[]>>({});
+  const [browseRows, setBrowseRows] = useState<BrowseRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const setTab = useCallback(
-    (tab: ContentTab) => {
-      const next = new URLSearchParams(params);
-      next.set('tab', tab);
-      next.delete('page');
-      if (tab !== 'genres') next.delete('genre');
-      setParams(next);
-    },
-    [params, setParams],
-  );
-
   const setGenre = useCallback(
     (genreId: string | null) => {
-      const next = new URLSearchParams(params);
+      const next = new URLSearchParams();
       next.set('tab', 'genres');
-      next.delete('page');
       if (genreId) next.set('genre', genreId);
-      else next.delete('genre');
       setParams(next);
     },
-    [params, setParams],
-  );
-
-  const setPage = useCallback(
-    (nextPage: number) => {
-      const next = new URLSearchParams(params);
-      next.set('page', String(nextPage));
-      setParams(next);
-    },
-    [params, setParams],
+    [setParams],
   );
 
   useEffect(() => {
     let cancelled = false;
+    const cacheKey =
+      activeTab === 'genres'
+        ? browseCacheKey('genres', 'browse')
+        : browseCacheKey(activeTab, '');
+    const cached = getBrowseCache(cacheKey);
+
+    if (cached) {
+      setHero(cached.banner[0] || null);
+      setBrowseRows(cached.rows);
+      setLoading(false);
+      warmPosters(cached.banner, 8);
+      cached.rows.forEach((row) => warmPosters(row.items, 16));
+    } else {
+      setBrowseRows([]);
+      setHero(null);
+      setLoading(true);
+    }
+    setError(null);
 
     async function load() {
-      setLoading(true);
-      setError(null);
-      setAnimeSub({});
-
       try {
         if (activeTab === 'anime') {
           const home = await getHome();
           if (cancelled) return;
 
-          const recent = home.items.slice(0, 16);
-          setHero(recent[0] || null);
-          setItems(recent);
-          setLoading(false);
-
           const subs = await Promise.all(
-            ANIME_SUBSECTIONS.map((s) => getCategory(s.apiPath).catch(() => ({ items: [] as AnimeItem[] }))),
+            ANIME_SUBSECTIONS.map((s) => getCategoryMany(s.apiPath, 1).catch(() => [] as AnimeItem[])),
           );
           if (cancelled) return;
 
-          const subMap: Record<string, AnimeItem[]> = {};
-          ANIME_SUBSECTIONS.forEach((s, i) => {
-            subMap[s.label] = subs[i].items.slice(0, 12);
+          const rows: BrowseRow[] = [
+            {
+              title: 'Récemment ajoutés',
+              items: home.items.slice(0, ROW_SIZE),
+              seeAllTo: browseCatalogPath('home', 'Récemment ajoutés'),
+            },
+            ...ANIME_SUBSECTIONS.map((sub, i) => ({
+              title: `Anime ${sub.label}`,
+              items: subs[i].slice(0, ROW_SIZE),
+              seeAllTo: browseCatalogPath(sub.apiPath, `Anime ${sub.label}`),
+            })),
+            ...rowsFromItems(home.items, ['Nouveautés', 'Encore plus d’animes'], 'home'),
+          ].filter((row) => row.items.length > 0);
+
+          const banner = home.items.slice(0, 8);
+          setHero(banner[0] || null);
+          setBrowseRows(rows);
+          setBrowseCache(cacheKey, banner, rows);
+          setLoading(false);
+          warmPosters(banner, 8);
+          rows.forEach((row) => warmPosters(row.items, 16));
+
+          const genreRows = await Promise.all(
+            HOME_GENRE_ROWS.map((genreId) => {
+              const genre = getGenreById(genreId);
+              if (!genre) return null;
+              return getCategoryMany(genre.apiPath, 2)
+                .then((items) => ({
+                  title: genre.label,
+                  genreId: genre.id,
+                  items: items.slice(0, ROW_SIZE),
+                  seeAllTo: browseGenrePath(genre.id),
+                } as BrowseRow))
+                .catch(() => null);
+            }),
+          );
+          if (cancelled) return;
+
+          setBrowseRows((current) => {
+            const seen = new Set(current.map((row) => row.title));
+            const extra = genreRows.filter(
+              (row): row is BrowseRow =>
+                row !== null && row.items.length > 5 && !seen.has(row.title),
+            );
+            const next = [...current, ...extra];
+            setBrowseCache(cacheKey, banner, next);
+            return next;
           });
-          setAnimeSub(subMap);
           return;
         }
 
         if (activeTab === 'genres') {
-          const genre = activeGenre ? getGenreById(activeGenre) : null;
-          const data = genre
-            ? await getCategory(genre.apiPath)
-            : await getCategory('mangas-vostfr');
+          const genreRows = await Promise.all(
+            GENRES.map(async (genre) => {
+              try {
+                const items = await getCategoryMany(genre.apiPath, CATALOG_PAGES);
+                if (!items.length) return null;
+                return {
+                  title: genre.label,
+                  genreId: genre.id,
+                  items: items.slice(0, ROW_SIZE),
+                  seeAllTo: browseGenrePath(genre.id),
+                } as BrowseRow;
+              } catch {
+                return null;
+              }
+            }),
+          );
           if (cancelled) return;
-          setItems(data.items);
-          setHero(data.items[0] || null);
-          setAnimeSub({});
-        } else {
-          const section = getSectionById(activeTab);
-          const data = await getCategory(section.apiPath);
+
+          const rows = genreRows.filter((row): row is BrowseRow => row !== null);
+          const focusGenre = activeGenre ? getGenreById(activeGenre) : null;
+          const focusRow = focusGenre
+            ? rows.find((row) => row.genreId === focusGenre.id)
+            : rows[0];
+          const banner = (focusRow?.items || rows[0]?.items || []).slice(0, 8);
+
+          setHero(banner[0] || null);
+          setBrowseRows(rows);
+          setBrowseCache(cacheKey, banner, rows);
+          warmPosters(banner, 8);
+          rows.forEach((row) => warmPosters(row.items, 16));
+        } else if (activeTab === 'films' || activeTab === 'series') {
+          const { rows, banner } = await loadFilmsOrSeriesRows(activeTab);
           if (cancelled) return;
-          setItems(data.items);
-          setHero(data.items[0] || null);
-          setAnimeSub({});
+
+          setHero(banner[0] || null);
+          setBrowseRows(rows);
+          setBrowseCache(cacheKey, banner, rows);
+          warmPosters(banner, 8);
+          rows.forEach((row) => warmPosters(row.items, 16));
         }
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Erreur de chargement');
-          setItems([]);
+          setBrowseRows([]);
           setHero(null);
-          setAnimeSub({});
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -136,35 +259,22 @@ export default function Home() {
     };
   }, [activeTab, activeGenre]);
 
+  useEffect(() => {
+    if (activeTab !== 'genres' || !activeGenre || loading) return;
+    const timer = window.setTimeout(() => {
+      document.getElementById(`genre-row-${activeGenre}`)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [activeTab, activeGenre, loading, browseRows.length]);
+
   const section = getSectionById(activeTab);
   const genre = activeGenre ? getGenreById(activeGenre) : null;
-  const paginatedItems = useMemo(
-    () => paginateSlice(items, page, PAGE_SIZE),
-    [items, page],
-  );
-  const listTotalPages = totalPagesFromCount(items.length, PAGE_SIZE);
-
-  function ListWithPagination({
-    list,
-    totalPages,
-  }: {
-    list: AnimeItem[];
-    totalPages: number;
-  }) {
-    return (
-      <>
-        <div className={GRID_CLASS}>
-          {list.map((item) => (
-            <AnimeCard key={item.id} item={item} />
-          ))}
-        </div>
-        <Pagination page={page} totalPages={totalPages} onPageChange={setPage} className="mt-8" />
-      </>
-    );
-  }
 
   return (
-    <div className="home">
+    <div className="home nf-browse">
       {loading && !hero ? (
         <div className="home-skeleton-hero skeleton-hero" aria-hidden />
       ) : hero ? (
@@ -173,23 +283,28 @@ export default function Home() {
           style={{ backgroundImage: `url(${hero.poster})` }}
         >
           <div className="hero-overlay" />
-          <div className="hero-content px-4 py-10 sm:px-8 sm:py-14 md:px-12">
-            <span className="hero-tag">{section.label}</span>
+          <div className="hero-content px-4 pb-10 sm:px-8 sm:pb-12 md:px-12 md:pb-14">
+            <span className="hero-tag">{activeTab === 'genres' && genre ? genre.label : section.label}</span>
             <h1 className="max-w-3xl text-2xl font-extrabold sm:text-3xl md:text-4xl lg:text-5xl">
               {hero.title}
             </h1>
             {hero.episodes && <p className="hero-meta">{hero.episodes} épisodes</p>}
-            <Link to={`/anime/${hero.id}`} className="btn-primary">
+            <Link
+              to={playPath(hero.id)}
+              className="btn-primary"
+              onMouseEnter={() => prefetchAnime(hero.id)}
+            >
               ▶ Regarder
             </Link>
           </div>
         </section>
       ) : null}
 
-      <div className="home-controls px-4 sm:px-6">
-        <SectionTabs active={activeTab} onChange={setTab} />
-        <GenreBar activeGenre={activeGenre} onSelect={(id) => setGenre(id)} />
-      </div>
+      {activeTab === 'genres' && (
+        <div className="home-controls px-4 sm:px-6">
+          <GenreBar activeGenre={activeGenre} onSelect={(id) => setGenre(id)} />
+        </div>
+      )}
 
       {error && (
         <div className="page-error mx-4 mt-4 rounded-lg border border-red-500/30 bg-red-500/10 sm:mx-6">
@@ -200,75 +315,23 @@ export default function Home() {
         </div>
       )}
 
-      {loading && (
-        <section className="section max-w-[1440px] mx-auto px-4 py-7 sm:px-6 md:py-10">
-          <SkeletonGrid count={activeTab === 'anime' ? 8 : 12} />
-        </section>
-      )}
+      {activeTab === 'anime' && <ContinueRow />}
+      {activeTab === 'anime' && <FavoritesRow />}
 
-      {!loading && !error && items.length === 0 && (
+      {loading && !browseRows.length ? (
+        <SkeletonRows />
+      ) : browseRows.length === 0 && !loading && !error ? (
         <div className="empty-state">Aucun contenu disponible pour le moment.</div>
-      )}
-
-      {activeTab === 'anime' && !loading && items.length > 0 && (
-        <>
-          <section className="section max-w-[1440px] mx-auto px-4 py-7 sm:px-6 md:py-10">
-            <div className="section-head">
-              <h2>Anime — Récemment ajoutés</h2>
-              <span className="section-desc">Priorité VOSTFR & VF</span>
-            </div>
-            <div className={GRID_CLASS}>
-              {items.map((item) => (
-                <AnimeCard key={item.id} item={item} />
-              ))}
-            </div>
-          </section>
-
-          {ANIME_SUBSECTIONS.map((sub) => (
-            <section className="section max-w-[1440px] mx-auto px-4 py-7 sm:px-6 md:py-10" key={sub.label}>
-              <div className="section-head">
-                <h2>Anime {sub.label}</h2>
-              </div>
-              <div className={GRID_CLASS}>
-                {(animeSub[sub.label] || []).map((item) => (
-                  <AnimeCard key={item.id} item={item} />
-                ))}
-              </div>
-            </section>
-          ))}
-        </>
-      )}
-
-      {activeTab === 'films' && !loading && items.length > 0 && (
-        <section className="section max-w-[1440px] mx-auto px-4 py-7 sm:px-6 md:py-10">
-          <div className="section-head">
-            <h2>Films</h2>
-            <span className="section-desc">{section.description}</span>
-          </div>
-          <ListWithPagination list={paginatedItems} totalPages={listTotalPages} />
-        </section>
-      )}
-
-      {activeTab === 'series' && !loading && items.length > 0 && (
-        <section className="section max-w-[1440px] mx-auto px-4 py-7 sm:px-6 md:py-10">
-          <div className="section-head">
-            <h2>Séries</h2>
-            <span className="section-desc">{section.description}</span>
-          </div>
-          <ListWithPagination list={paginatedItems} totalPages={listTotalPages} />
-        </section>
-      )}
-
-      {activeTab === 'genres' && !loading && items.length > 0 && (
-        <section className="section max-w-[1440px] mx-auto px-4 py-7 sm:px-6 md:py-10">
-          <div className="section-head">
-            <h2>{genre ? genre.label : 'Explorer par genre'}</h2>
-            <span className="section-desc">
-              {genre ? 'Contenus filtrés par genre' : 'Sélectionne un genre ci-dessus'}
-            </span>
-          </div>
-          <ListWithPagination list={paginatedItems} totalPages={listTotalPages} />
-        </section>
+      ) : (
+        browseRows.map((row, index) => (
+          <AnimeRow
+            key={`${activeTab}-${row.genreId || row.title}-${index}`}
+            rowId={row.genreId ? `genre-row-${row.genreId}` : undefined}
+            title={row.title}
+            items={row.items}
+            seeAllTo={row.seeAllTo}
+          />
+        ))
       )}
     </div>
   );
